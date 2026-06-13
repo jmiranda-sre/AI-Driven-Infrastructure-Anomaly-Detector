@@ -46,11 +46,11 @@ Traditional monitoring uses **fixed thresholds** (e.g., "alert if CPU > 80%"). T
 ## ⚡ How It Works
 
 ```
-┌──────────────┐    ┌─────────────────┐    ┌────────────────┐    ┌──────────────┐
-│  Prometheus  │    │  Feature         │    │  ML Pipeline    │    │  Alerting    │
+┌──────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌──────────────┐
+│  Prometheus  │     │  Feature        │     │  ML Pipeline    │     │  Alerting    │
 │  Kafka       │───▶│  Engineering    │───▶│  IF + LSTM + HW │───▶│  Slack       │
-│  Custom API  │    │  Rolling Stats  │    │  Ensemble       │    │  PagerDuty   │
-└──────────────┘    └─────────────────┘    └────────────────┘    └──────────────┘
+│  Custom API  │     │  Rolling Stats  │     │  Ensemble       │     │  PagerDuty   │
+└──────────────┘     └─────────────────┘     └─────────────────┘     └──────────────┘
       Ingestion          Processing            Detection           Notification
 ```
 
@@ -65,28 +65,28 @@ Traditional monitoring uses **fixed thresholds** (e.g., "alert if CPU > 80%"). T
 ## 🏗️ Architecture
 
 ```
-                                    ┌────────────────────────────┐
-                                    │     FastAPI REST API       │
-                                    │  /api/v1/{alerts,models,   │
-                                    │   servers,metrics,predict} │
-                                    └─────────┬──────────────────┘
-                                              │
-                   ┌──────────────────────────┼──────────────────────────┐
-                   │                          │                          │
-          ┌────────▼────────┐     ┌───────────▼────────┐     ┌──────────▼─────────┐
-          │  Alert Service    │     │  ML Pipeline        │     │  Model Manager     │
-          │  - Evaluator      │     │  - Ensemble         │     │  - Load/Save       │
-          │  - Dispatcher     │     │  - Drift Detection   │     │  - Version         │
-          │  - Suppression    │     │  - Train/Retrain    │     │  - Metrics         │
-          └────────┬─────────┘     └───────────┬─────────┘     └──────────┬─────────┘
-                   │                           │                          │
-          ┌────────▼───────────────────────────▼──────────────────────────▼─────────┐
-          │                        Ingestion Orchestrator                          │
-          │  ┌───────────────┐  ┌──────────────────┐  ┌──────────────────────┐     │
-          │  │  Prometheus   │  │  Kafka Consumer   │  │  Feature Engineering │     │
-          │  │  Client       │  │  (aiokafka)       │  │  (Rolling Windows)   │     │
-          │  └───────────────┘  └──────────────────┘  └──────────────────────┘     │
-          └─────────────────────────────┬──────────────────────────────────────────┘
+                                      ┌────────────────────────────┐
+                                      │     FastAPI REST API       │
+                                      │  /api/v1/{alerts,models,   │
+                                      │   servers,metrics,predict} │
+                                      └─────────┬──────────────────┘
+                                                │
+                   ┌────────────────────────────┼─────────────────────────────┐
+                   │                            │                             │
+          ┌────────▼──────────┐     ┌───────────▼──────────┐       ┌──────────▼─────────┐
+          │  Alert Service    │     │  ML Pipeline         │       │  Model Manager     │
+          │  - Evaluator      │     │  - Ensemble          │       │  - Load/Save       │
+          │  - Dispatcher     │     │  - Drift Detection   │       │  - Version         │
+          │  - Suppression    │     │  - Train/Retrain     │       │  - Metrics         │
+          └────────┬──────────┘     └───────────┬──────────┘       └──────────┬─────────┘
+                   │                            │                             │
+          ┌────────▼────────────────────────────▼─────────────────────────────▼─────────┐
+          │                        Ingestion Orchestrator                               │
+          │  ┌───────────────┐  ┌───────────────────┐  ┌──────────────────────┐         │
+          │  │  Prometheus   │  │  Kafka Consumer   │  │  Feature Engineering │         │
+          │  │  Client       │  │  (aiokafka)       │  │  (Rolling Windows)   │         │
+          │  └───────────────┘  └───────────────────┘  └──────────────────────┘         │
+          └─────────────────────────────┬───────────────────────────────────────────────┘
                                         │
                    ┌────────────────────┼────────────────────────────┐
                    │                    │                            │
