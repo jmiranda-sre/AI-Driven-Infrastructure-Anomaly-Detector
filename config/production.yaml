@@ -1,0 +1,42 @@
+# Production overrides — merged on top of default.yaml
+service:
+  environment: "production"
+  workers: 8
+  log_level: "warn"
+
+ingestion:
+  prometheus:
+    scrape_interval: 30
+    query_timeout: 15
+  kafka:
+    enabled: true
+    session_timeout_ms: 45000
+
+ml:
+  models:
+    isolation_forest:
+      n_estimators: 200
+      contamination: 0.03
+    lstm_autoencoder:
+      epochs: 100
+      hidden_size: 128
+  training:
+    schedule: "0 */4 * * *"
+
+alerting:
+  suppression:
+    cooldown_minutes: 15
+    max_alerts_per_hour: 100
+
+database:
+  postgres:
+    pool_size: 20
+    max_overflow: 40
+
+security:
+  cors:
+    allowed_origins:
+      - "https://anomaly-detector.example.com"
+  rate_limiting:
+    default_limit: 200
+    auth_limit: 5

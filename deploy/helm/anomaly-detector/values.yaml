@@ -1,0 +1,74 @@
+# Default values for anomaly-detector
+replicaCount: 2
+
+image:
+  repository: anomaly-detector
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: nginx
+  host: anomaly-detector.example.com
+  tls:
+    enabled: true
+    secretName: anomaly-detector-tls
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "250m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilization: 70
+  targetMemoryUtilization: 80
+
+secrets:
+  postgresPassword: ""
+  jwtSecret: ""
+  influxdbToken: ""
+
+config:
+  serviceEnv: production
+  logLevel: warn
+  workers: 8
+  scrapeInterval: 30
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: standard
+
+podDisruptionBudget:
+  minAvailable: 1
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+probes:
+  liveness:
+    path: /live
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readiness:
+    path: /ready
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics

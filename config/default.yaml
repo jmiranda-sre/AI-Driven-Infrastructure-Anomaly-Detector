@@ -1,0 +1,224 @@
+# AI-Driven Infrastructure Anomaly Detector
+# Default Configuration — override via environment variables or config override file
+
+service:
+  name: anomaly-detector
+  version: "1.0.0"
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  log_level: "info"
+  environment: "development"
+
+# Ingestion configuration
+ingestion:
+  prometheus:
+    enabled: true
+    url: "http://localhost:9090"
+    scrape_interval: 15          # seconds
+    query_timeout: 10            # seconds
+    metrics:
+      - name: "cpu_usage"
+        query: '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+      - name: "memory_usage"
+        query: '100 * (1 - ((node_memory_MemAvailable_bytes) / (node_memory_MemTotal_bytes)))'
+      - name: "disk_io_util"
+        query: 'rate(node_disk_io_time_seconds_total[5m])'
+      - name: "network_in"
+        query: 'rate(node_network_receive_bytes_total[5m])'
+      - name: "network_out"
+        query: 'rate(node_network_transmit_bytes_total[5m])'
+      - name: "load_avg_5m"
+        query: 'node_load5'
+      - name: "iowait"
+        query: 'avg by (instance) (rate(node_cpu_seconds_total{mode="iowait"}[5m])) * 100'
+      - name: "error_rate"
+        query: 'rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100'
+
+  kafka:
+    enabled: false
+    bootstrap_servers: "localhost:9092"
+    topic: "infrastructure-metrics"
+    consumer_group: "anomaly-detector-group"
+    auto_offset_reset: "latest"
+    max_poll_records: 500
+    session_timeout_ms: 30000
+
+  backfill:
+    enabled: false
+    days: 7
+
+# ML processing configuration
+ml:
+  models:
+    isolation_forest:
+      enabled: true
+      contamination: 0.05
+      n_estimators: 100
+      max_samples: "auto"
+      random_state: 42
+      warm_start: false
+
+    lstm_autoencoder:
+      enabled: true
+      sequence_length: 60        # timesteps
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.2
+      learning_rate: 0.001
+      epochs: 50
+      batch_size: 32
+      threshold_percentile: 95  # reconstruction error threshold
+
+    holt_winters:
+      enabled: true
+      seasonal_periods: 288     # daily seasonality at 5min intervals (288 * 5 = 1440 min = 24h)
+      trend: "add"
+      seasonal: "add"
+      alpha: null               # auto-fit
+      beta: null
+      gamma: null
+
+  inference:
+    batch_size: 100
+    max_latency_ms: 100
+    ensemble_method: "weighted"  # weighted | majority | any
+    weights:
+      isolation_forest: 0.4
+      lstm_autoencoder: 0.4
+      holt_winters: 0.2
+
+  training:
+    schedule: "0 */6 * * *"     # every 6 hours
+    min_samples: 1000
+    validation_split: 0.2
+    drift_threshold: 0.15       # PSI threshold
+    retrain_on_drift: true
+    model_dir: "./models/trained"
+
+  feature_engineering:
+    window_sizes: [5, 15, 60]   # minutes for rolling features
+    features:
+      - "mean"
+      - "std"
+      - "min"
+      - "max"
+      - "skew"
+      - "kurtosis"
+
+# Alerting configuration
+alerting:
+  severity_levels:
+    - name: "info"
+      min_score: 0.5
+      color: "#36a3eb"
+    - name: "warning"
+      min_score: 0.7
+      color: "#f5a623"
+    - name: "critical"
+      min_score: 0.85
+      color: "#e74c3c"
+
+  suppression:
+    cooldown_minutes: 30        # same alert type cooldown
+    max_alerts_per_hour: 50
+    deduplicate_window_minutes: 5
+
+  prediction:
+    horizon_hours: 2            # predict 2 hours ahead
+    confidence_threshold: 0.6
+
+  channels:
+    webhook:
+      enabled: false
+      url: ""
+      headers: {}
+      timeout: 5
+
+    slack:
+      enabled: false
+      webhook_url: ""
+      channel: "#alerts"
+      username: "Anomaly Detector"
+
+    pagerduty:
+      enabled: false
+      routing_key: ""
+      severity_map:
+        info: "info"
+        warning: "warning"
+        critical: "critical"
+
+    email:
+      enabled: false
+      smtp_host: ""
+      smtp_port: 587
+      smtp_tls: true
+      sender: ""
+      recipients: []
+
+# Persistence
+database:
+  postgres:
+    host: "localhost"
+    port: 5432
+    name: "anomaly_detector"
+    user: "anomaly"
+    password: ""                # override via POSTGRES_PASSWORD env
+    pool_size: 10
+    max_overflow: 20
+    statement_timeout: 5000     # ms
+
+  timeseries:
+    type: "influxdb"            # influxdb | prometheus | victoria_metrics
+    influxdb:
+      url: "http://localhost:8086"
+      token: ""
+      org: "anomaly-detector"
+      bucket: "metrics"
+      timeout: 10
+
+# Security
+security:
+  auth:
+    enabled: true
+    provider: "jwt"             # jwt | oauth2
+    jwt:
+      secret: ""                # override via JWT_SECRET env
+      algorithm: "HS256"
+      access_token_expire_minutes: 15
+      refresh_token_expire_days: 7
+      issuer: "anomaly-detector"
+
+  cors:
+    allowed_origins:
+      - "http://localhost:3000"
+      - "http://localhost:8080"
+    allowed_methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    allowed_headers: ["Authorization", "Content-Type", "X-Request-ID"]
+    max_age: 600
+
+  rate_limiting:
+    enabled: true
+    default_limit: 100
+    default_window: 60          # seconds
+    auth_limit: 5
+    auth_window: 900           # 15 min
+
+# Observability
+observability:
+  tracing:
+    enabled: false
+    provider: "jaeger"
+    jaeger:
+      endpoint: "http://localhost:14268/api/traces"
+      service_name: "anomaly-detector"
+
+  metrics:
+    enabled: true
+    path: "/metrics"            # Prometheus scrape endpoint
+
+  logging:
+    format: "json"              # json | text
+    level: "info"               # debug | info | warn | error
+    correlation_id: true
