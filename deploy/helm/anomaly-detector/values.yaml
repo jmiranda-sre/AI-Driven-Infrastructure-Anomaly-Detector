@@ -15,6 +15,10 @@ ingress:
   enabled: false
   className: nginx
   host: anomaly-detector.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
   tls:
     enabled: true
     secretName: anomaly-detector-tls
@@ -38,12 +42,15 @@ secrets:
   postgresPassword: ""
   jwtSecret: ""
   influxdbToken: ""
+  slackWebhookUrl: ""
+  pagerdutyRoutingKey: ""
 
 config:
   serviceEnv: production
   logLevel: warn
-  workers: 8
-  scrapeInterval: 30
+  schedule: "0 */6 * * *"
+  driftThreshold: "0.15"
+  ensembleMethod: "weighted"
 
 persistence:
   enabled: true
@@ -72,3 +79,7 @@ serviceMonitor:
   enabled: true
   interval: 15s
   path: /metrics
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

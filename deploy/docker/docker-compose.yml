@@ -91,8 +91,12 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_UID: anomaly-detector-overview
     volumes:
       - grafanadata:/var/lib/grafana
+      - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ../grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ../grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
       - influxdb

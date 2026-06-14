@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "anomaly-detector.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "anomaly-detector.labels" . | nindent 4 }}
+data:
+  SERVICE_ENV: {{ .Values.config.serviceEnv | quote }}
+  SERVICE_PORT: {{ .Values.service.targetPort | quote }}
+  AD__ML__TRAINING__SCHEDULE: {{ .Values.config.schedule | quote }}
+  AD__ML__TRAINING__DRIFT_THRESHOLD: {{ .Values.config.driftThreshold | quote }}
+  AD__ML__INFERENCE__ENSEMBLE_METHOD: {{ .Values.config.ensembleMethod | quote }}

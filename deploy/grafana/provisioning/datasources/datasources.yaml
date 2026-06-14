@@ -1,0 +1,22 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    database: metrics
+    editable: true
+    jsonData:
+      version: "2"
+      organization: anomaly-detector
+      defaultBucket: metrics
+    secureJsonData:
+      token: ${INFLUXDB_TOKEN}

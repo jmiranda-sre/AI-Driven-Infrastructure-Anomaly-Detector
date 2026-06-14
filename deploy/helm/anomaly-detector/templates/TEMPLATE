@@ -1,9 +1,0 @@
-templates:
-  - deployment.yaml
-  - service.yaml
-  - ingress.yaml
-  - hpa.yaml
-  - pdb.yaml
-  - secret.yaml
-  - service-monitor.yaml
-  - pvc.yaml

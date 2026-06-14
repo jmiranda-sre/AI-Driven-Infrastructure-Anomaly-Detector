@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "anomaly-detector.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "anomaly-detector.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "anomaly-detector.selectorLabels" . | nindent 6 }}
+{{- end }}

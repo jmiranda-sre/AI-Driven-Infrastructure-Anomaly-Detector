@@ -426,8 +426,8 @@ bandit -r src/ -ll
 - [x] Slack + PagerDuty + Email channels
 - [x] Drift detection with auto-retraining
 - [x] JWT authentication
-- [ ] Kubernetes Helm chart
-- [ ] Grafana dashboards
+- [x] Kubernetes Helm chart
+- [x] Grafana dashboards
 - [x] Comprehensive test suite (>80% coverage)
 
 ### v2.0 — Advanced Features
