@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from prometheus_client import REGISTRY as prom_registry
+from prometheus_client import REGISTRY as PROM_REGISTRY
 from prometheus_client import Counter, Histogram, generate_latest
 from starlette.responses import PlainTextResponse
 
@@ -86,6 +86,17 @@ async def lifespan(app: FastAPI):
 
     # Connect ingestion → ML pipeline
     _orchestrator.register_handler(pipeline.process_features)
+
+    # Initialize database schema (safe no-op if DB unavailable)
+    try:
+        from src.core.database import init_schema
+        await init_schema()
+        logger.info("app.db_schema_initialized")
+    except Exception as e:
+        logger.warning("app.db_schema_init_skipped", error=str(e))
+
+    # Start periodic retraining scheduler
+    pipeline.start_training_scheduler_task()
 
     # Start ingestion
     await _orchestrator.start()
@@ -199,7 +210,7 @@ def create_app() -> FastAPI:
         limiter = Limiter(
             key_func=get_remote_address,
             default_limits=[
-                f"{cfg['security']['rate_limiting']['default_limit']}/{cfg['security']['rate_limiting']['default_window']}second"
+                f"{cfg['security']['rate_limiting']['default_limit']}/minute"
             ],
         )
         app.state.limiter = limiter
@@ -224,7 +235,7 @@ def create_app() -> FastAPI:
     async def prometheus_metrics():
         """Prometheus scrape endpoint."""
         return PlainTextResponse(
-            generate_latest(prom_registry).decode("utf-8"),
+            generate_latest(PROM_REGISTRY).decode("utf-8"),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 

@@ -57,11 +57,20 @@ def _add_correlation_id(
     return event_dict
 
 
+def _safe_filter_by_level(
+    logger: logging.Logger, method: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Like filter_by_level but safe when logger is None (background threads)."""
+    if logger is None:
+        return event_dict
+    return structlog.stdlib.filter_by_level(logger, method, event_dict)
+
+
 def configure_logging(log_level: str = "info", json_format: bool = True) -> None:
     """Configure structlog for JSON structured logging."""
     shared_processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.filter_by_level,
+        _safe_filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),

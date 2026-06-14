@@ -40,19 +40,27 @@ class WebhookChannel(AlertChannel):
         self._headers = headers or {"Content-Type": "application/json"}
         self._timeout = timeout
         self._breaker = get_breaker("webhook")
+        # Reuse a single httpx.AsyncClient to avoid connection leaks
         self._client: httpx.AsyncClient | None = None
 
     @property
     def name(self) -> str:
         return "webhook"
 
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get or create a lazily-initialized httpx client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
+
     async def send(self, alert: Alert) -> bool:
         if not self._url:
-            logger.warn("webhook.no_url_configured")
+            logger.warning("webhook.no_url_configured")
             return False
 
+        client = self._get_client()
+
         async def _do_send():
-            client = self._client or httpx.AsyncClient(timeout=self._timeout)
             resp = await client.post(
                 self._url,
                 json=alert.to_dict(),
@@ -66,6 +74,12 @@ class WebhookChannel(AlertChannel):
         except Exception as e:
             logger.error("webhook.send_failed", error=str(e), url=self._url)
             return False
+
+    async def close(self) -> None:
+        """Close the httpx client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
 
 class SlackChannel(AlertChannel):
@@ -83,7 +97,7 @@ class SlackChannel(AlertChannel):
 
     def _format_slack_message(self, alert: Alert) -> dict:
         """Format alert as Slack Block Kit message."""
-        emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
+        emoji = {"info": "i", "warning": "w", "critical": "c"}
         color = {"info": "#36a3eb", "warning": "#f5a623", "critical": "#e74c3c"}
 
         blocks = [
@@ -286,12 +300,15 @@ class AlertDispatcher:
             ))
 
         if cfg.get("email", {}).get("enabled"):
+            email_cfg = cfg["email"]
             self._channels.append(EmailChannel(
-                smtp_host=cfg["email"]["smtp_host"],
-                smtp_port=cfg["email"]["smtp_port"],
-                sender=cfg["email"]["sender"],
-                recipients=cfg["email"]["recipients"],
-                smtp_tls=cfg["email"].get("smtp_tls", True),
+                smtp_host=email_cfg["smtp_host"],
+                smtp_port=email_cfg["smtp_port"],
+                sender=email_cfg["sender"],
+                recipients=email_cfg["recipients"],
+                smtp_tls=email_cfg.get("smtp_tls", True),
+                smtp_user=email_cfg.get("smtp_user", ""),
+                smtp_pass=email_cfg.get("smtp_pass", ""),
             ))
 
     def add_channel(self, channel: AlertChannel) -> None:
@@ -304,7 +321,7 @@ class AlertDispatcher:
             Dict of channel_name -> success
         """
         if not self._channels:
-            logger.warn("dispatcher.no_channels")
+            logger.warning("dispatcher.no_channels")
             return {}
 
         results = await asyncio.gather(

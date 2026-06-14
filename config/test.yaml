@@ -33,5 +33,7 @@ database:
 
 security:
   auth:
+    enabled: false
     jwt:
       secret: "test-secret-key-for-testing-only"
+    users: []

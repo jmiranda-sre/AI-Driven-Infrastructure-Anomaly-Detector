@@ -6,6 +6,7 @@ Coordinates: data ingestion → feature engineering → model training/inference
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from datetime import datetime
 
 import numpy as np
@@ -20,6 +21,9 @@ from src.ml_processing.lstm_autoencoder import LSTMAnomalyDetector
 from src.ml_processing.model_manager import ModelManager
 
 logger = get_logger("ml.pipeline")
+
+# Max total entries across all server buffers
+_MAX_TOTAL_BUFFER = 100_000
 
 
 class MLPipeline:
@@ -40,7 +44,11 @@ class MLPipeline:
         )
         self._alert_callback = None
         self._training_task: asyncio.Task | None = None
-        self._data_buffer: dict[str, list[tuple[dict[str, float], datetime]]] = {}
+        self._scheduler_task: asyncio.Task | None = None
+        # Data buffer: server_id -> deque of (features_dict, timestamp)
+        self._data_buffer: dict[str, deque[tuple[dict[str, float], datetime]]] = {}
+        # Lock to prevent concurrent train/detect race conditions
+        self._lock = asyncio.Lock()
 
         # Initialize models based on config
         self._init_models()
@@ -70,7 +78,7 @@ class MLPipeline:
                 self.ensemble.register_model("lstm_autoencoder", lstm_detector)
                 self.model_manager.register_model("lstm_autoencoder", lstm_detector, algorithm="lstm_autoencoder")
             except ImportError:
-                logger.warn("pipeline.lstm_unavailable")
+                logger.warning("pipeline.lstm_unavailable")
 
         if models_cfg.get("holt_winters", {}).get("enabled", True):
             hw_detector = HoltWintersDetector(self._config)
@@ -81,6 +89,36 @@ class MLPipeline:
         """Register callback for anomaly detection results → alerting module."""
         self._alert_callback = callback
 
+    def _trim_buffer(self, server_id: str) -> None:
+        """Trim a server buffer to respect per-server and total caps."""
+        max_per_server = self._config["ml"]["training"].get("min_samples", 1000) * 2
+        buf = self._data_buffer.get(server_id)
+        if buf and len(buf) > max_per_server:
+            # Trim from front (oldest data first)
+            while len(buf) > max_per_server:
+                buf.popleft()
+
+    def _trim_total_buffer(self) -> None:
+        """Enforce total buffer cap across all servers (FIFO eviction)."""
+        total = sum(len(v) for v in self._data_buffer.values())
+        if total <= _MAX_TOTAL_BUFFER:
+            return
+        # Evict oldest entries from the server with the largest buffer
+        while total > _MAX_TOTAL_BUFFER and self._data_buffer:
+            largest_sid = max(self._data_buffer, key=lambda s: len(self._data_buffer[s]))
+            buf = self._data_buffer[largest_sid]
+            if buf:
+                buf.popleft()
+                total -= 1
+            else:
+                del self._data_buffer[largest_sid]
+
+    def _features_to_vector(self, features: dict[str, float]) -> np.ndarray:
+        """Convert a features dict to a deterministic numpy vector."""
+        return np.array(
+            [features[k] for k in sorted(features.keys())], dtype=np.float64
+        )
+
     async def process_features(
         self, server_id: str, features: dict[str, float], timestamp: datetime
     ) -> None:
@@ -89,30 +127,27 @@ class MLPipeline:
         This is the main callback registered with IngestionOrchestrator.
         """
         # Buffer data for training
-        self._data_buffer.setdefault(server_id, []).append((features, timestamp))
-        max_buffer = self._config["ml"]["training"].get("min_samples", 1000)
-        if len(self._data_buffer[server_id]) > max_buffer * 2:
-            self._data_buffer[server_id] = self._data_buffer[server_id][-max_buffer:]
+        if server_id not in self._data_buffer:
+            self._data_buffer[server_id] = deque(maxlen=self._config["ml"]["training"].get("min_samples", 1000) * 2)
+        self._data_buffer[server_id].append((features, timestamp))
+        self._trim_total_buffer()
 
-        # Convert features to numpy vector
         if not features:
             return
 
-        feature_vector = np.array(
-            [features[k] for k in sorted(features.keys())], dtype=np.float64
-        )
+        feature_vector = self._features_to_vector(features)
 
         # Check if models are trained
-        active = self.ensemble.active_models
-        if not active:
-            # Auto-train if we have enough data
-            min_samples = self._config["ml"]["training"].get("min_samples", 1000)
-            total_samples = sum(len(v) for v in self._data_buffer.values())
-            if total_samples >= min_samples:
-                await self.train_all()
-            return
+        async with self._lock:
+            active = self.ensemble.active_models
+            if not active:
+                min_samples = self._config["ml"]["training"].get("min_samples", 1000)
+                total_samples = sum(len(v) for v in self._data_buffer.values())
+                if total_samples >= min_samples:
+                    await self.train_all()
+                return
 
-        # Run ensemble detection with forecast
+        # Run ensemble detection with forecast (no lock — reads are safe)
         try:
             horizon_steps = self._config["ml"]["inference"].get("prediction_steps", 24)
             result = self.ensemble.predict_with_forecast(
@@ -137,12 +172,8 @@ class MLPipeline:
         except Exception as e:
             logger.error("pipeline.inference_error", server_id=server_id, error=str(e))
 
-    async def train_all(self) -> dict[str, dict]:
-        """Train all enabled models using buffered data.
-
-        Returns:
-            Dict of model_name → training_metrics
-        """
+    def train_all_sync(self) -> dict[str, dict]:
+        """Synchronous training — call via asyncio.to_thread to avoid blocking event loop."""
         results = {}
         all_features = []
 
@@ -152,14 +183,12 @@ class MLPipeline:
                 all_features.append(vec)
 
         if len(all_features) < 10:
-            logger.warn("pipeline.insufficient_training_data", n_samples=len(all_features))
+            logger.warning("pipeline.insufficient_training_data", n_samples=len(all_features))
             return results
 
         data = np.array(all_features, dtype=np.float64)
-        # Replace NaN/Inf
         data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Train each model
         for name, model in self.ensemble._models.items():
             try:
                 if hasattr(model, "train"):
@@ -180,6 +209,14 @@ class MLPipeline:
         logger.info("pipeline.training_complete", models=list(results.keys()))
         return results
 
+    async def train_all(self) -> dict[str, dict]:
+        """Train all enabled models using buffered data.
+
+        Runs sync sklearn .fit() in thread pool to avoid blocking the event loop.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(self.train_all_sync)
+
     async def train_univariate(self, server_id: str, metric_name: str, values: np.ndarray) -> dict:
         """Train univariate models (Holt-Winters) on a single metric series."""
         hw = self.ensemble._models.get("holt_winters")
@@ -190,6 +227,55 @@ class MLPipeline:
     def check_drift(self, current_data: dict[str, np.ndarray]) -> list[dict]:
         """Check all models for concept drift."""
         return self.drift_detector.check_all_drifts(current_data)
+
+    def check_drift_from_buffer(self) -> list[dict]:
+        """Check drift using data from the pipeline's internal buffer.
+
+        Constructs current_data arrays from the buffer and runs drift
+        detection against stored reference distributions.
+        """
+        if not self._data_buffer:
+            return []
+
+        # Build per-model feature arrays from buffer
+        feature_keys = None
+
+        for _server_id, buffer in self._data_buffer.items():
+            if not buffer:
+                continue
+            features, _ = buffer[-1]
+            if feature_keys is None:
+                feature_keys = sorted(features.keys())
+
+        if feature_keys is None:
+            return []
+
+        # Collect all feature vectors into an array for drift detection
+        all_vectors = []
+        for _server_id, buffer in self._data_buffer.items():
+            for features, _ in buffer:
+                try:
+                    vec = [features.get(k, 0.0) for k in feature_keys]
+                    all_vectors.append(vec)
+                except Exception:
+                    continue
+
+        if len(all_vectors) < 10:
+            return []
+
+        data = np.array(all_vectors, dtype=np.float64)
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Run drift check for each registered model reference
+        return self.drift_detector.check_all_drifts(
+            dict.fromkeys(self.drift_detector.registered_features, data)
+        )
+
+    def start_training_scheduler_task(self) -> None:
+        """Fire-and-forget: start the periodic retraining scheduler task."""
+        if self._scheduler_task is not None:
+            return
+        self._scheduler_task = asyncio.ensure_future(self.start_training_scheduler())
 
     async def start_training_scheduler(self) -> None:
         """Start periodic model retraining (background task)."""

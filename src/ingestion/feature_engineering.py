@@ -30,6 +30,8 @@ class FeatureEngineer:
         # Internal state: windows keyed by (server_id, metric_name)
         self._windows: dict[str, MetricWindow] = {}
         self._max_window = max(self.window_sizes) * 12  # 12 pts/min at 5s intervals
+        # Cap on total number of windows to prevent unbounded memory
+        self._max_windows = 10_000
 
     def _window_key(self, server_id: str, metric_name: str) -> str:
         return f"{server_id}::{metric_name}"
@@ -38,6 +40,10 @@ class FeatureEngineer:
         """Add a metric point to the appropriate sliding window."""
         key = self._window_key(point.server_id, point.name)
         if key not in self._windows:
+            # Evict oldest window if at capacity
+            if len(self._windows) >= self._max_windows:
+                oldest_key = next(iter(self._windows))
+                del self._windows[oldest_key]
             self._windows[key] = MetricWindow(
                 server_id=point.server_id,
                 metric_name=point.name,

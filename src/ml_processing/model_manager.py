@@ -116,7 +116,11 @@ class ModelManager:
         try:
             model = joblib.load(model_path)
             self._models[name] = model
-            extracted_version = model_path.stem.split("_")[-1]
+            # Extract version from filename: {name}_{version}.joblib
+            # Falls back to "unknown" if pattern doesn't match
+            stem = model_path.stem
+            prefix = f"{name}_"
+            extracted_version = stem[len(prefix):] if stem.startswith(prefix) and len(stem) > len(prefix) else "unknown"
             self._info[name] = ModelInfo(
                 name=name, version=extracted_version, algorithm=type(model).__name__,
                 path=model_path, loaded_at=datetime.now(UTC),
@@ -134,11 +138,20 @@ class ModelManager:
         return self._models[name]
 
     def save_model(self, name: str, model: Any, version: str = "1.0.0") -> Path:
-        """Save a model to disk with versioning."""
+        """Save a model to disk with versioning. Returns path on success."""
         path = self._model_dir / f"{name}_{version}.joblib"
-        joblib.dump(model, path)
-        logger.info("model.saved", name=name, version=version, path=str(path))
-        return path
+        try:
+            self._model_dir.mkdir(parents=True, exist_ok=True)
+            joblib.dump(model, path)
+            # Update info if model is registered
+            if name in self._info:
+                self._info[name].version = version
+                self._active_versions[name] = version
+            logger.info("model.saved", name=name, version=version, path=str(path))
+            return path
+        except Exception as e:
+            logger.error("model.save_failed", name=name, error=str(e))
+            raise ModelLoadError(name, f"Failed to save model to {path}: {e}") from e
 
     def list_loaded_models(self) -> list[str]:
         return list(self._models.keys())

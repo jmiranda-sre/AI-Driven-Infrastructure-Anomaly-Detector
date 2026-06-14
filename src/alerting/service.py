@@ -105,14 +105,37 @@ class AlertService:
                 return alert.to_dict()
         return None
 
-    def acknowledge_alert(self, alert_id: str) -> bool:
-        """Mark an alert as acknowledged."""
+    def acknowledge_alert(self, alert_id: str, acknowledged_by: str = "unknown") -> bool:
+        """Mark an alert as acknowledged (in-memory + attempt DB persist)."""
         for alert in self._alert_history:
             if alert.alert_id == alert_id:
-                # In production, persist to DB
-                logger.info("alert.acknowledged", alert_id=alert_id)
+                alert.acknowledged = True
+                alert.acknowledged_by = acknowledged_by
+                logger.info("alert.acknowledged", alert_id=alert_id, by=acknowledged_by)
+                # Attempt to persist to DB (non-blocking, best-effort)
+                try:
+                    import asyncio
+                    _ack_task = asyncio.ensure_future(self._persist_acknowledgment(alert_id, acknowledged_by))
+                    _ack_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+                except RuntimeError:
+                    pass  # No event loop in sync context — memory-only
                 return True
         return False
+
+    async def _persist_acknowledgment(self, alert_id: str, acknowledged_by: str) -> None:
+        """Persist acknowledgment to database (best-effort)."""
+        try:
+            from src.core.database import get_db_pool
+            pool = await get_db_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE alerts SET acknowledged = TRUE, metadata = jsonb_set(COALESCE(metadata, '{}'), '{acknowledged_by}', $1::jsonb) WHERE server_id = $2",
+                    f'"{acknowledged_by}"',
+                    alert_id,
+                )
+                logger.debug("alert.ack_persisted", alert_id=alert_id)
+        except Exception as e:
+            logger.warning("alert.ack_persist_failed", alert_id=alert_id, error=str(e))
 
     def get_stats(self) -> dict:
         """Get alert statistics."""

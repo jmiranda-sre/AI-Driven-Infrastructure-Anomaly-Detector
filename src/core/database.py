@@ -1,10 +1,10 @@
-"""Database connection management — PostgreSQL (asyncpg) + InfluxDB."""
+"""Database connection management — PostgreSQL (asyncpg) + InfluxDB.
+
+Both asyncpg and influxdb-client are optional (part of [full] extras).
+Import guards allow the app to start without them for development/test.
+"""
 
 from __future__ import annotations
-
-import asyncpg
-from influxdb_client import InfluxDBClient
-from influxdb_client.client.write_api import SYNCHRONOUS
 
 from src.core.config import get_config
 from src.core.errors import DatabaseError
@@ -12,13 +12,43 @@ from src.core.logging import get_logger
 
 logger = get_logger("database")
 
-_pg_pool: asyncpg.Pool | None = None
-_influx_client: InfluxDBClient | None = None
+# Lazy imports — only import when actually needed
+asyncpg = None
+InfluxDBClient = None
+SYNCHRONOUS = None
+
+def _lazy_import_asyncpg():
+    global asyncpg
+    if asyncpg is None:
+        try:
+            import asyncpg as _asyncpg
+            asyncpg = _asyncpg
+        except ImportError as e:
+            raise ImportError("asyncpg is not installed — install with: pip install anomaly-detector[full]") from e
+    return asyncpg
 
 
-async def get_db_pool() -> asyncpg.Pool:
+def _lazy_import_influxdb():
+    global InfluxDBClient, SYNCHRONOUS
+    if InfluxDBClient is None:
+        try:
+            from influxdb_client import InfluxDBClient as InfluxDBClientType
+            from influxdb_client.client.write_api import SYNCHRONOUS as SYNC_WRITE
+            InfluxDBClient = InfluxDBClientType
+            SYNCHRONOUS = SYNC_WRITE
+        except ImportError:
+            return False
+    return True
+
+
+_pg_pool = None
+_influx_client = None
+
+
+async def get_db_pool():
     """Get or create the PostgreSQL connection pool."""
     global _pg_pool
+    apg = _lazy_import_asyncpg()
     if _pg_pool is None or _pg_pool._closed:
         cfg = get_config()["database"]["postgres"]
         logger.info(
@@ -26,7 +56,7 @@ async def get_db_pool() -> asyncpg.Pool:
             host=cfg["host"], port=cfg["port"], database=cfg["name"],
         )
         try:
-            _pg_pool = await asyncpg.create_pool(
+            _pg_pool = await apg.create_pool(
                 host=cfg["host"],
                 port=cfg["port"],
                 database=cfg["name"],
@@ -43,9 +73,12 @@ async def get_db_pool() -> asyncpg.Pool:
     return _pg_pool
 
 
-def get_influxdb_client() -> InfluxDBClient | None:
+def get_influxdb_client():
     """Get or create the InfluxDB client."""
     global _influx_client
+    if not _lazy_import_influxdb():
+        logger.warning("influxdb.not_available", detail="influxdb-client not installed")
+        return None
     if _influx_client is None:
         try:
             cfg = get_config()["database"]["timeseries"]["influxdb"]
@@ -56,7 +89,7 @@ def get_influxdb_client() -> InfluxDBClient | None:
                 timeout=cfg.get("timeout", 10) * 1000,
             )
         except Exception as e:
-            logger.warn("influxdb.connection_failed", error=str(e))
+            logger.warning("influxdb.connection_failed", error=str(e))
             return None
     return _influx_client
 
@@ -64,7 +97,7 @@ def get_influxdb_client() -> InfluxDBClient | None:
 def get_influxdb_write_api():
     """Get InfluxDB synchronous write API."""
     client = get_influxdb_client()
-    if client:
+    if client and SYNCHRONOUS is not None:
         return client.write_api(write_options=SYNCHRONOUS)
     return None
 
@@ -136,10 +169,15 @@ CREATE INDEX IF NOT EXISTS idx_models_active ON models(is_active) WHERE is_activ
 """
 
 
-async def init_schema(pool: asyncpg.Pool | None = None) -> None:
-    """Initialize database schema (idempotent)."""
-    if pool is None:
-        pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(SCHEMA_SQL)
-    logger.info("database.schema_initialized")
+async def init_schema(pool=None) -> None:
+    """Initialize database schema (idempotent). Safe no-op if asyncpg unavailable."""
+    try:
+        if pool is None:
+            pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(SCHEMA_SQL)
+        logger.info("database.schema_initialized")
+    except ImportError:
+        logger.warning("database.schema_skipped", detail="asyncpg not available")
+    except Exception as e:
+        logger.warning("database.schema_init_failed", error=str(e))

@@ -68,6 +68,7 @@ class TestFeatureEngineer:
         fe.feature_names = ["mean", "std", "min", "max"]
         fe._windows = {}
         fe._max_window = 1000
+        fe._max_windows = 10_000
 
         # Push 20 points
         ts = datetime.now(UTC)
@@ -87,9 +88,10 @@ class TestFeatureEngineer:
         fe.feature_names = ["mean", "std"]
         fe._windows = {}
         fe._max_window = 1000
+        fe._max_windows = 10_000
 
         ts = datetime.now(UTC)
-        for i in range(20):
+        for _i in range(20):
             fe.push(MetricPoint(name="cpu", value=50.0, timestamp=ts, server_id="s1"))
             fe.push(MetricPoint(name="mem", value=60.0, timestamp=ts, server_id="s1"))
 
@@ -103,6 +105,7 @@ class TestFeatureEngineer:
         fe.feature_names = ["mean", "std"]
         fe._windows = {}
         fe._max_window = 1000
+        fe._max_windows = 10_000
 
         ts = datetime.now(UTC)
         for i in range(20):

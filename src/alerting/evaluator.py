@@ -34,14 +34,21 @@ class AlertEvaluator:
 
     def __init__(self, config: dict | None = None):
         cfg = (config or get_config())["alerting"]
-        self.severity_levels = cfg.get("severity_levels", [])
+        # Severity levels with sensible fallback (config key was missing → empty list)
+        self.severity_levels = cfg.get("severity_levels", [
+            {"name": "info", "min_score": 0.5},
+            {"name": "warning", "min_score": 0.7},
+            {"name": "critical", "min_score": 0.85},
+        ])
         self.suppression_state = SuppressionState()
         self._cooldown_minutes = cfg.get("suppression", {}).get("cooldown_minutes", 30)
         self._max_alerts_per_hour = cfg.get("suppression", {}).get("max_alerts_per_hour", 50)
         self._dedup_window_min = cfg.get("suppression", {}).get("deduplicate_window_minutes", 5)
         self._prediction_confidence = cfg.get("prediction", {}).get("confidence_threshold", 0.6)
         self._rules: list[AlertRule] = []
-        self._grafana_url = ""  # configurable
+        # Grafana dashboard URL from config (observability.tracing.jaeger.endpoint region)
+        observability_cfg = (config or get_config()).get("observability", {})
+        self._grafana_url = observability_cfg.get("grafana_url", "")
 
     def add_rule(self, rule: AlertRule) -> None:
         self._rules.append(rule)
@@ -73,7 +80,7 @@ class AlertEvaluator:
 
         count = self.suppression_state.alert_counts.get(key, 0)
         if count >= self._max_alerts_per_hour:
-            logger.warn("alert.rate_limited", key=key, count=count)
+            logger.warning("alert.rate_limited", key=key, count=count)
             return True
 
         return False

@@ -11,7 +11,8 @@ class TestHealthEndpoint:
 
     def test_health_returns_status(self):
         from src.api.app import create_app
-        app = create_app()
+
+        create_app()  # ensure app factory works
         # Override lifespan for testing
         from fastapi import FastAPI
 
@@ -46,10 +47,11 @@ class TestMetricPipeline:
         fe.feature_names = ["mean", "std", "min", "max"]
         fe._windows = {}
         fe._max_window = 1000
+        fe._max_windows = 10_000
 
         ts = datetime.now(UTC)
         # Push normal data
-        for i in range(50):
+        for _i in range(50):
             fe.push(MetricPoint(name="cpu", value=45.0 + np.random.normal(0, 3), timestamp=ts, server_id="s1"))
 
         features = fe.compute_features("s1", "cpu")
@@ -74,7 +76,7 @@ class TestMetricPipeline:
         detector._trained = False
         detector._feature_count = 0
 
-        metrics = detector.train(data)
+        detector.train(data)
         assert detector.is_trained
 
         # Detect normal

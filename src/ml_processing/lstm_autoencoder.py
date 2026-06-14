@@ -175,7 +175,7 @@ class LSTMAnomalyDetector:
             return {"error": "insufficient data for sequences"}
 
         # Convert to tensors
-        X = torch.FloatTensor(sequences).to(self._device)
+        x_tensor = torch.FloatTensor(sequences).to(self._device)
 
         # Initialize model
         self._model = LSTMAutoencoder(
@@ -186,7 +186,7 @@ class LSTMAnomalyDetector:
         ).to(self._device)
 
         # Train
-        dataset = TensorDataset(X, X)
+        dataset = TensorDataset(x_tensor, x_tensor)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
         optimizer = torch.optim.Adam(self._model.parameters(), lr=self.lr)
@@ -194,7 +194,7 @@ class LSTMAnomalyDetector:
         losses = []
 
         self._model.train()
-        for epoch in range(self.epochs):
+        for _epoch in range(self.epochs):
             epoch_loss = 0.0
             for batch_x, batch_y in loader:
                 optimizer.zero_grad()
@@ -205,14 +205,14 @@ class LSTMAnomalyDetector:
                 epoch_loss += loss.item()
             avg_loss = epoch_loss / len(loader)
             losses.append(avg_loss)
-            if epoch % 10 == 0:
-                logger.debug("lstm.train_epoch", epoch=epoch, loss=round(avg_loss, 6))
+            if _epoch % 10 == 0:
+                logger.debug("lstm.train_epoch", epoch=_epoch, loss=round(avg_loss, 6))
 
         # Compute reconstruction error threshold on training data
         self._model.eval()
         with torch.no_grad():
-            reconstructions = self._model(X)
-            errors = torch.mean((X - reconstructions) ** 2, dim=(1, 2)).cpu().numpy()
+            reconstructions = self._model(x_tensor)
+            errors = torch.mean((x_tensor - reconstructions) ** 2, dim=(1, 2)).cpu().numpy()
         self._threshold = float(np.percentile(errors, self.threshold_percentile))
 
         self._trained = True
@@ -243,17 +243,17 @@ class LSTMAnomalyDetector:
         self._input_size = data.shape[1]
 
         # Create input-target pairs
-        X_list, y_list = [], []
+        x_list, y_list = [], []
         for i in range(len(data) - self.sequence_length - horizon + 1):
-            X_list.append(data[i : i + self.sequence_length])
+            x_list.append(data[i : i + self.sequence_length])
             # Target: next `horizon` values of first feature
             y_list.append(data[i + self.sequence_length : i + self.sequence_length + horizon, 0])
 
-        if len(X_list) < 2:
+        if len(x_list) < 2:
             return {"error": "insufficient data for forecasting"}
 
-        X = torch.FloatTensor(np.array(X_list)).to(self._device)
-        y = torch.FloatTensor(np.array(y_list)).to(self._device)
+        x_tensor = torch.FloatTensor(np.array(x_list)).to(self._device)
+        y_tensor = torch.FloatTensor(np.array(y_list)).to(self._device)
 
         self._forecaster = LSTMForecaster(
             input_size=self._input_size,
@@ -263,13 +263,13 @@ class LSTMAnomalyDetector:
             dropout=self.dropout,
         ).to(self._device)
 
-        dataset = TensorDataset(X, y)
+        dataset = TensorDataset(x_tensor, y_tensor)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         optimizer = torch.optim.Adam(self._forecaster.parameters(), lr=self.lr)
         criterion = nn.MSELoss()
 
         self._forecaster.train()
-        for epoch in range(self.epochs):
+        for _epoch in range(self.epochs):
             epoch_loss = 0.0
             for bx, by in loader:
                 optimizer.zero_grad()
@@ -311,18 +311,15 @@ class LSTMAnomalyDetector:
             features = features.reshape(1, features.shape[0], self._input_size)
 
         features = np.nan_to_num(features, nan=0.0)
-        X = torch.FloatTensor(features).to(self._device)
+        x_tensor = torch.FloatTensor(features).to(self._device)
 
         self._model.eval()
         with torch.no_grad():
-            reconstruction = self._model(X)
-            error = float(torch.mean((X - reconstruction) ** 2).cpu().numpy())
+            reconstruction = self._model(x_tensor)
+            error = float(torch.mean((x_tensor - reconstruction) ** 2).cpu().numpy())
 
         # Score: 0 = normal, 1 = anomalous
-        if self._threshold > 0:
-            anomaly_score = min(1.0, error / (self._threshold * 2))
-        else:
-            anomaly_score = 0.0
+        anomaly_score = min(1.0, error / (self._threshold * 2)) if self._threshold > 0 else 0.0
 
         is_anomaly = error > self._threshold
         latency = (time.monotonic() - start) * 1000
@@ -356,10 +353,10 @@ class LSTMAnomalyDetector:
         if features.ndim == 2:
             features = features.reshape(1, features.shape[0], self._input_size)
 
-        X = torch.FloatTensor(np.nan_to_num(features, nan=0.0)).to(self._device)
+        x_tensor = torch.FloatTensor(np.nan_to_num(features, nan=0.0)).to(self._device)
         self._forecaster.eval()
         with torch.no_grad():
-            forecast = self._forecaster(X).cpu().numpy()
+            forecast = self._forecaster(x_tensor).cpu().numpy()
         return forecast[0]
 
     def save(self, path: Path) -> None:

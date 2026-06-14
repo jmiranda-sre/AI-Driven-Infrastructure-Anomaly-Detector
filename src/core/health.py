@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from src.core.logging import get_logger
@@ -15,7 +15,7 @@ from src.core.logging import get_logger
 logger = get_logger("health")
 
 
-class HealthStatus(str, Enum):
+class HealthStatus(StrEnum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -146,8 +146,40 @@ async def _check_ml_models() -> HealthCheckResult:
         return HealthCheckResult(name="ml_models", status=HealthStatus.DEGRADED, detail=str(e))
 
 
+async def _check_ingestion() -> HealthCheckResult:
+    """Check if ingestion orchestrator is running."""
+    try:
+        from src.api.app import _orchestrator
+        if _orchestrator is None:
+            return HealthCheckResult(name="ingestion", status=HealthStatus.DEGRADED, detail="not initialized")
+        if _orchestrator._running:
+            return HealthCheckResult(
+                name="ingestion", status=HealthStatus.HEALTHY,
+                detail=f"{len(_orchestrator.feature_engineer.get_servers())} servers tracked"
+            )
+        return HealthCheckResult(name="ingestion", status=HealthStatus.DEGRADED, detail="not running")
+    except Exception as e:
+        return HealthCheckResult(name="ingestion", status=HealthStatus.DEGRADED, detail=str(e))
+
+
+async def _check_alerting() -> HealthCheckResult:
+    """Check if alert service is operational."""
+    try:
+        from src.alerting.service import AlertService
+        service = AlertService.get_instance()
+        stats = service.get_stats()
+        return HealthCheckResult(
+            name="alerting", status=HealthStatus.HEALTHY,
+            detail=f"{stats['channels']} channels, {stats['total_alerts']} alerts tracked"
+        )
+    except Exception as e:
+        return HealthCheckResult(name="alerting", status=HealthStatus.DEGRADED, detail=str(e))
+
+
 def register_default_checks() -> None:
     """Register default health checks for all subsystems."""
     register_health_check("database", _check_database)
     register_health_check("influxdb", _check_influxdb)
     register_health_check("ml_models", _check_ml_models)
+    register_health_check("ingestion", _check_ingestion)
+    register_health_check("alerting", _check_alerting)

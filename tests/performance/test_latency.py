@@ -37,9 +37,7 @@ class TestIsolationForestPerformance:
             latencies.append((time.monotonic() - start) * 1000)
 
         avg_latency = np.mean(latencies)
-        p99_latency = np.percentile(latencies, 99)
 
-        print(f"Isolation Forest — Avg: {avg_latency:.2f}ms, P99: {p99_latency:.2f}ms")
         assert avg_latency < 50, f"Average latency {avg_latency}ms exceeds 50ms threshold"
 
     def test_batch_inference_throughput(self):
@@ -62,11 +60,10 @@ class TestIsolationForestPerformance:
 
         batch = data[:1000]
         start = time.monotonic()
-        results = detector.batch_detect(batch)
+        detector.batch_detect(batch)
         total_ms = (time.monotonic() - start) * 1000
 
         per_sample_ms = total_ms / len(batch)
-        print(f"Batch 1000 — Total: {total_ms:.1f}ms, Per-sample: {per_sample_ms:.3f}ms")
         assert per_sample_ms < 1.0, f"Per-sample latency {per_sample_ms}ms exceeds 1ms threshold"
 
 
@@ -84,10 +81,11 @@ class TestFeatureEngineeringPerformance:
         fe.feature_names = ["mean", "std", "min", "max", "skew", "kurtosis"]
         fe._windows = {}
         fe._max_window = 10000
+        fe._max_windows = 10_000
 
         ts = datetime.now(UTC)
         # Pre-populate
-        for i in range(1000):
+        for _i in range(1000):
             fe.push(MetricPoint(name="cpu", value=50 + np.random.normal(0, 5), timestamp=ts, server_id="s1"))
             fe.push(MetricPoint(name="mem", value=60 + np.random.normal(0, 3), timestamp=ts, server_id="s1"))
 
@@ -99,5 +97,4 @@ class TestFeatureEngineeringPerformance:
             latencies.append((time.monotonic() - start) * 1000)
 
         avg = np.mean(latencies)
-        print(f"Feature computation — Avg: {avg:.3f}ms")
         assert avg < 10.0, f"Feature computation avg {avg}ms exceeds 10ms threshold"

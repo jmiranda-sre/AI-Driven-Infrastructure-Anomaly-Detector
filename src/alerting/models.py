@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -53,6 +53,8 @@ class Alert:
     dashboard_url: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     correlation_id: str = ""
+    acknowledged: bool = False
+    acknowledged_by: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +71,8 @@ class Alert:
             "dashboard_url": self.dashboard_url,
             "timestamp": self.timestamp.isoformat(),
             "correlation_id": self.correlation_id,
+            "acknowledged": self.acknowledged,
+            "acknowledged_by": self.acknowledged_by,
         }
 
     def to_json(self) -> str:

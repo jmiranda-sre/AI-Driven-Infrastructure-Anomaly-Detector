@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from src.core.errors import AppError
+from src.core.errors import AppError, RateLimitError
 from src.core.logging import get_logger
 
 logger = get_logger("api.error_handler")
@@ -35,16 +35,22 @@ def _build_error_response(
 
     response = JSONResponse(status_code=status_code, content=body)
 
-    # Don't leak retry info in production
-    if isinstance(None, type(retryable)) or retryable:
-        pass  # Could add Retry-After header for rate limits
+    # Add Retry-After header for rate limit responses
+    if status_code == 429:
+        retry_after = 60
+        if retryable and details:
+            for d in (details if isinstance(details, list) else []):
+                if isinstance(d, dict) and "retry_after" in d:
+                    retry_after = d["retry_after"]
+                    break
+        response.headers["Retry-After"] = str(retry_after)
 
     return response
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     """Handle all AppError subtypes."""
-    logger.warn(
+    logger.warning(
         "api.app_error",
         code=exc.code,
         message=exc.message,
@@ -55,6 +61,10 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     details = []
     if "fields" in exc.context:
         details = [{"field": k, "message": v} for k, v in exc.context["fields"].items()]
+
+    # Include retry_after in details for rate limit errors
+    if isinstance(exc, RateLimitError) and "retry_after" in exc.context:
+        details.append(exc.context)
 
     return _build_error_response(
         code=exc.code,

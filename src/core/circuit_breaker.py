@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from enum import Enum
+from enum import StrEnum
 from typing import Any, TypeVar
 
 from src.core.logging import get_logger
@@ -14,7 +14,7 @@ logger = get_logger("circuit_breaker")
 T = TypeVar("T")
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     CLOSED = "closed"       # Normal — requests flow through
     OPEN = "open"           # Tripped — requests are rejected
     HALF_OPEN = "half_open" # Testing — limited requests allowed

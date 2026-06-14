@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 
 
-class MetricType(str, Enum):
+class MetricType(StrEnum):
     GAUGE = "gauge"
     COUNTER = "counter"
     HISTOGRAM = "histogram"
@@ -69,9 +69,10 @@ class MetricWindow:
     def push(self, value: float, timestamp: datetime) -> None:
         self.values.append(value)
         self.timestamps.append(timestamp)
-        if len(self.values) > self.max_size:
-            self.values = self.values[-self.max_size:]
-            self.timestamps = self.timestamps[-self.max_size:]
+        # Evict oldest entries when exceeding max_size
+        while len(self.values) > self.max_size:
+            self.values.pop(0)
+            self.timestamps.pop(0)
 
     def to_numpy(self) -> np.ndarray:
         return np.array(self.values, dtype=np.float64)

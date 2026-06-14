@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -21,7 +22,7 @@ from src.api.schemas import (
     TrainResponse,
 )
 from src.core.config import get_config
-from src.core.errors import NotFoundError
+from src.core.errors import AuthError, NotFoundError, PredictionError
 from src.core.health import HealthStatus, run_health_checks
 from src.core.logging import get_logger
 from src.core.security import (
@@ -72,11 +73,23 @@ async def liveness_check():
 
 # ── Auth ─────────────────────────────────────────────────────────
 
+# Config-based user store for v1 — users defined in config under security.auth.users
+# Each user: {email: ..., password_hash: ..., roles: [...]}
+# Password hash = sha256(password) for simplicity (bcrypt in future)
+
+def _verify_credentials(email: str, password: str, cfg: dict) -> list[str] | None:
+    """Verify credentials against config-based user store. Returns roles or None."""
+    users = cfg.get("users", [])
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    for user in users:
+        if user.get("email") == email and user.get("password_hash") == password_hash:
+            return user.get("roles", ["viewer"])
+    return None
+
+
 @auth_router.post("/login", response_model=ApiResponse[LoginResponse])
 async def login(body: LoginRequest, request: Request):
     """Authenticate and receive JWT tokens."""
-    # In production: verify against user store
-    # This is a demo implementation — replace with real auth
     cfg = get_config()["security"]["auth"]
     if not cfg.get("enabled", True):
         # Auth disabled in dev — issue token directly
@@ -88,10 +101,14 @@ async def login(body: LoginRequest, request: Request):
             expires_in=cfg["jwt"]["access_token_expire_minutes"] * 60,
         ))
 
-    # Production: validate credentials against store
-    # For demo: accept any valid email/password format
-    logger.info("auth.login_attempt", email=body.email[:3] + "***")
-    access = create_access_token(body.email, roles=["viewer"])
+    # Production: validate credentials against config user store
+    roles = _verify_credentials(body.email, body.password, cfg)
+    if roles is None:
+        logger.warning("auth.login_failed", email=body.email[:3] + "***")
+        raise AuthError("Invalid email or password")
+
+    logger.info("auth.login_success", email=body.email[:3] + "***")
+    access = create_access_token(body.email, roles=roles)
     refresh = create_refresh_token(body.email)
     return ApiResponse(data=LoginResponse(
         access_token=access,
@@ -135,10 +152,10 @@ async def acknowledge_alert(
     """Acknowledge an alert."""
     from src.alerting.service import AlertService
     service = AlertService.get_instance()
-    success = service.acknowledge_alert(alert_id)
+    success = service.acknowledge_alert(alert_id, user.get("sub", "unknown"))
     if not success:
         raise NotFoundError("Alert", alert_id)
-    return ApiResponse(data={"acknowledged": True})
+    return ApiResponse(data={"acknowledged": True, "alert_id": alert_id})
 
 
 @alert_router.get("/stats/summary", response_model=ApiResponse[dict])
@@ -165,27 +182,31 @@ async def train_models(
     user: dict = Depends(require_role("admin")),
 ):
     """Trigger model training/retraining."""
-    from src.ml_processing.pipeline import MLPipeline
-    pipeline = MLPipeline.get_instance()
-    results = pipeline.train_all()
-    # Since train_all is async, we need to handle it
     import asyncio
-    results = asyncio.get_event_loop().run_until_complete(pipeline.train_all()) if not asyncio.iscoroutine_function(pipeline.train_all) else None
-    if results is None:
-        import asyncio
-        results = {}
+    import time as _time
+
+    from src.ml_processing.pipeline import MLPipeline
+
+    pipeline = MLPipeline.get_instance()
+    start = _time.monotonic()
+
+    # Run training in thread pool to avoid blocking the event loop
+    results = await asyncio.to_thread(pipeline.train_all_sync)
+    duration = _time.monotonic() - start
+
     return ApiResponse(data=TrainResponse(
         models_trained=list(results.keys()) if isinstance(results, dict) else [],
         metrics=results if isinstance(results, dict) else {},
+        duration_seconds=round(duration, 3),
     ))
 
 
 @model_router.get("/drift", response_model=ApiResponse[list[dict]])
 async def check_drift(user: dict = Depends(require_role("admin", "operator"))):
-    """Check all models for concept drift."""
+    """Check all models for concept drift using buffered data."""
     from src.ml_processing.pipeline import MLPipeline
     pipeline = MLPipeline.get_instance()
-    drifts = pipeline.check_drift({})
+    drifts = pipeline.check_drift_from_buffer()
     return ApiResponse(data=drifts)
 
 
@@ -194,19 +215,24 @@ async def check_drift(user: dict = Depends(require_role("admin", "operator"))):
 @server_router.get("", response_model=ApiResponse[list[ServerStatusSchema]])
 async def list_servers(user: dict = Depends(get_current_user)):
     """List all monitored servers and their status."""
-    # Get the global orchestrator (set during app startup)
     try:
         from src.api.app import _orchestrator
+        if _orchestrator is None:
+            raise AttributeError
         servers = _orchestrator.get_latest_metrics()
     except (ImportError, AttributeError):
         servers = {}
+
+    from src.ml_processing.pipeline import MLPipeline
+    pipeline = MLPipeline.get_instance()
+    active_models = pipeline.ensemble.active_models
 
     result = []
     for sid, metrics in servers.items():
         result.append(ServerStatusSchema(
             server_id=sid,
             metrics=metrics,
-            active_models=[],
+            active_models=active_models,
         ))
     return ApiResponse(data=result)
 
@@ -216,16 +242,23 @@ async def get_server(server_id: str, user: dict = Depends(get_current_user)):
     """Get detailed status for a specific server."""
     try:
         from src.api.app import _orchestrator
-        metrics = _orchestrator.get_latest_metrics(server_id)
+        if _orchestrator is None:
+            raise AttributeError
+        all_metrics = _orchestrator.get_latest_metrics()
     except (ImportError, AttributeError):
-        metrics = {server_id: {}}
+        all_metrics = {}
 
-    if server_id not in metrics:
+    if server_id not in all_metrics:
         raise NotFoundError("Server", server_id)
+
+    from src.ml_processing.pipeline import MLPipeline
+    pipeline = MLPipeline.get_instance()
+    active_models = pipeline.ensemble.active_models
 
     return ApiResponse(data=ServerStatusSchema(
         server_id=server_id,
-        metrics=metrics.get(server_id, {}),
+        metrics=all_metrics.get(server_id, {}),
+        active_models=active_models,
     ))
 
 
@@ -239,6 +272,8 @@ async def get_latest_metrics(
     """Get latest raw metrics from ingestion."""
     try:
         from src.api.app import _orchestrator
+        if _orchestrator is None:
+            raise AttributeError
         metrics = _orchestrator.get_latest_metrics(server_id)
     except (ImportError, AttributeError):
         metrics = {}
@@ -252,13 +287,50 @@ async def get_prediction(
     body: PredictionRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Get anomaly prediction for a server."""
+    """Get anomaly prediction for a server using the current feature buffer."""
     from src.ml_processing.pipeline import MLPipeline
-    pipeline = MLPipeline.get_instance()
-    pipeline.get_status()
 
-    return ApiResponse(data=PredictionResponse(
-        server_id=body.server_id,
-        anomaly_score=0.0,
-        prediction_horizon={},
-    ))
+    pipeline = MLPipeline.get_instance()
+
+    # Try to get a real detection result from the pipeline
+    try:
+        horizon_steps = body.horizon_steps
+
+        # Check if we have trained models
+        if not pipeline.ensemble.active_models:
+            return ApiResponse(data=PredictionResponse(
+                server_id=body.server_id,
+                anomaly_score=0.0,
+                prediction_horizon={"warning": "no trained models available"},
+            ))
+
+        # Get latest buffered data for this server
+        buffer = pipeline._data_buffer.get(body.server_id, [])
+        if not buffer:
+            return ApiResponse(data=PredictionResponse(
+                server_id=body.server_id,
+                anomaly_score=0.0,
+                prediction_horizon={"warning": "no data buffered for this server"},
+            ))
+
+        # Use the most recent feature vector
+        features_dict, _ts = buffer[-1]
+        feature_vector = pipeline._features_to_vector(features_dict)
+
+        # Run ensemble detection with forecast
+        result = pipeline.ensemble.predict_with_forecast(
+            feature_vector, body.server_id, horizon_steps=horizon_steps
+        )
+
+        horizon = {}
+        if result.prediction_horizon:
+            horizon = result.prediction_horizon
+
+        return ApiResponse(data=PredictionResponse(
+            server_id=body.server_id,
+            anomaly_score=round(result.anomaly_score, 4),
+            prediction_horizon=horizon,
+        ))
+    except Exception as e:
+        logger.error("prediction.failed", server_id=body.server_id, error=str(e))
+        raise PredictionError(str(e)) from e

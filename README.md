@@ -2,9 +2,9 @@
 
 > Predictive ML-powered anomaly detection for server infrastructure. Move from reactive threshold alerts to intelligent, context-aware anomaly detection.
 
-[![CI/CD](https://github.com/your-org/AI-Driven_Infrastructure_Anomaly_Detector/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/your-org/AI-Driven_Infrastructure_Anomaly_Detector/actions)
+[![CI/CD](https://github.com/jmiranda-sre/AI-Driven-Infrastructure-Anomaly-Detector/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/jmiranda-sre/AI-Driven-Infrastructure-Anomaly-Detector)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
+[![Python 3.14](https://img.shields.io/badge/Python-3.14-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Container-Docker-blue.svg)](deploy/docker/)
 
 ---
@@ -156,7 +156,7 @@ Uses **Population Stability Index (PSI)** to detect concept drift:
 
 ```bash
 # Clone
-git clone https://github.com/your-org/AI-Driven_Infrastructure_Anomaly_Detector.git
+git clone https://github.com/jmiranda-sre/AI-Driven-Infrastructure-Anomaly-Detector.git
 cd AI-Driven_Infrastructure_Anomaly_Detector
 
 # Configure
@@ -366,13 +366,13 @@ helm install anomaly-detector deploy/helm/anomaly-detector/ \
 - [ ] Set strong `JWT_SECRET` (≥64 chars random)
 - [ ] Set `POSTGRES_PASSWORD`
 - [ ] Set `INFLUXDB_TOKEN`
-- [ ] Configure alert channels (Slack, PagerDuty)
+- [x] Configure alert channels (Slack, PagerDuty)
 - [ ] Enable TLS (Ingress or load balancer)
 - [ ] Set CORS origins to production domains
 - [ ] Configure resource limits (1GB mem, 1 CPU default)
 - [ ] Enable HPA (min 2, max 8 replicas)
 - [ ] Set up backup for PostgreSQL and InfluxDB
-- [ ] Configure model retraining schedule
+- [x] Configure model retraining schedule
 
 ---
 
@@ -421,14 +421,14 @@ bandit -r src/ -ll
 - [x] Health checks & metrics
 
 ### v1.0 — Production Ready
-- [ ] LSTM Autoencoder (requires PyTorch)
-- [ ] Kafka ingestion
-- [ ] Slack + PagerDuty + Email channels
-- [ ] Drift detection with auto-retraining
-- [ ] JWT authentication
+- [x] LSTM Autoencoder (requires PyTorch)
+- [x] Kafka ingestion
+- [x] Slack + PagerDuty + Email channels
+- [x] Drift detection with auto-retraining
+- [x] JWT authentication
 - [ ] Kubernetes Helm chart
 - [ ] Grafana dashboards
-- [ ] Comprehensive test suite (>80% coverage)
+- [x] Comprehensive test suite (>80% coverage)
 
 ### v2.0 — Advanced Features
 - [ ] DBSCAN clustering model
